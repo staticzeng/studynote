@@ -1,0 +1,132 @@
+网卡驱动:
+
+request_irq()		//网卡驱动注册一个中断  以e1000为例中断处理函数为e1000_intr
+
+
+数据包接收：
+
+//上半部硬件中断处理函数
+e1000_intr:
+	ew32(IMC, ~0);//禁止中断				这里禁止中断之后哪里又开启的？？？
+	napi_schedule_prep
+		1.检查是否已经禁止NAPI
+		2.测试NAPI是否已经调度，没有调度还需要设置成已调度
+	__napi_schedule 
+		____napi_schedule(this_cpu_ptr(&softnet_data), n);  //napi_struct *n
+			list_add_tail(&napi->poll_list, &sd->poll_list); 	//将napi poll_list加入到每cpu softnet_data->poll_list中
+			__raise_softirq_irqoff(NET_RX_SOFTIRQ);			//触发软中断
+
+
+//下半部软中断处理函数
+net_rx_action
+	budget = 300； //每次软中断最多处理300个数据包，避免导致截
+	for(;;){
+		n = list_first_entry(&list, struct napi_struct, poll_list);
+		budget -= napi_poll(n, &repoll);
+		1.work = n->poll(n, weight); //napi_poll中调用每个napi_struct的poll方法
+	}
+
+
+
+以e1000为例 napi_struct->poll = e1000_clean
+e1000_clean
+	e1000_clean_tx_irq
+		e1000_receive_skb
+			napi_gro_receive
+				napi_skb_finish
+					__netif_receive_skb
+						__netif_receive_skb_core
+
+
+
+__netif_receive_skb_core函数是很重要的一个向上传递的接口,负责sniffix的探测处理,负责桥接ovs的处理,负责IP层协议的向上传递：
+	list_for_each_entry_rcu(ptype, &ptype_all, list){			//ptype_all以及dev->ptype_all都是相应的sniff程序
+		if(pt_prev)												//这里循环的是ptype，检查是pt_prev
+			deliver_skb(skb, pt_prev, orig_dev);
+		pt_prev = ptype;										//最后这里退出，其实还有一个pt_prev没有被处理
+	}
+	list_for_each_entry_rcu(ptype, &skb->dev->ptype_all, list){	//dev下代表针对该设备的处理，没有表示全部
+		if(pt_prev)
+			deliver_skb(skb, pt_prev, orig_dev);
+		pt_prev = ptype;
+	}
+
+
+//判断dev是否有rx_handler，有就deliver_skb给上一次pt_prev处理，然后调用rx_handler处理后返回
+//这里rx_handler只有在添加到网桥，ovs等特殊设备才会有
+4155     rx_handler = rcu_dereference(skb->dev->rx_handler);
+4156     if (rx_handler) {
+4157         if (pt_prev) {
+4158             ret = deliver_skb(skb, pt_prev, orig_dev);
+4159             pt_prev = NULL;
+4160         }
+4161         switch (rx_handler(&skb)) {
+4162         case RX_HANDLER_CONSUMED:
+4163             ret = NET_RX_SUCCESS;
+4164             goto out;
+4165         case RX_HANDLER_ANOTHER:
+4166             goto another_round;
+4167         case RX_HANDLER_EXACT:
+4168             deliver_exact = true;
+4169         case RX_HANDLER_PASS:
+4170             break;
+4171         default:
+4172             BUG();
+4173         }
+4174     }
+
+
+	    if (likely(!deliver_exact)) {								//根据ptype_base HASH比对之后传递给准确的协议处理
+    		deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
+                        &ptype_base[ntohs(type) &
+                        PTYPE_HASH_MASK]);
+	    }
+
+
+ip_rcv:
+
+	//混杂模式下不属于本机的包
+    if (skb->pkt_type == PACKET_OTHERHOST)
+        goto drop;
+    //解析出IP头部
+    iph = ip_hdr(skb);
+    //检查IP头部长度和版本号
+    if (iph->ihl < 5 || iph->version != 4)
+        goto inhdr_error;
+    //校验出
+    if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
+        goto csum_error;
+
+    //进入到NF_INET_PRE_ROUTING的钩子处理 并传递给ip_rcv_finish处理
+    return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
+               net, NULL, skb, dev, NULL,
+               ip_rcv_finish);
+
+ip_rcv_finish:
+	负责查找路由表，根据路由表转给ip_local_deliver或者ip_forward
+
+
+ip_local_deliver:
+
+//判断IP是不是分片中的一片
+//然后执行ip_defrag分片组装
+252     if (ip_is_fragment(ip_hdr(skb))) {
+253         if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
+254             return 0;
+255     }
+
+//进入NF_INET_LOCAL_IN钩子函数，然后传递给ip_local_deliver_finish
+257     return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN,
+258                net, NULL, skb, skb->dev, NULL,
+259                ip_local_deliver_finish);
+
+
+ip_local_deliver_finish:
+
+
+
+
+
+
+
+

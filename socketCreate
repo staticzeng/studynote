@@ -1,0 +1,94 @@
+net/socket.c
+
+struct socket {
+    socket_state        state;
+
+    kmemcheck_bitfield_begin(type);
+    short           type;
+    kmemcheck_bitfield_end(type);
+
+    unsigned long       flags;
+
+    struct socket_wq __rcu  *wq;
+
+    struct file     *file;
+    struct sock     *sk;                        //指向sock对象,这里的sock可能指向tcp_sock或者udp_sock
+    const struct proto_ops  *ops;
+};
+
+
+tcp_sock udp_sock inet_sock sock之间的关系
+
+struct tcp_sock{                                //tcp_sock
+    struct inet_connection_sock inet_conn;      //第一个字段是inet_connection_sock
+    ...
+}
+
+struct inet_connection_sock {                   //inet_connection_sock
+    /* inet_sock has to be the first member! */ //第一个字段是inet_sock
+    struct inet_sock      icsk_inet;
+    ...
+}
+
+struct udp_sock {                               //udp_sock
+    /* inet_sock has to be the first member */
+    struct inet_sock inet;                      //第一个字段是inet_sock
+}
+
+struct inet_sock {                              //inet_sock
+    /* sk and pinet6 has to be the first two members of inet_sock */
+    struct sock     sk;                         //第一个字段是sock
+}
+
+static inline struct inet_sock *inet_sk(const struct sock *sk)
+{    
+    return (struct inet_sock *)sk;
+}
+
+
+创建socket系统调用：
+
+SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
+    retval = sock_create(family, type, protocol, &sock);
+    retval = sock_map_fd(sock, flags & (O_CLOEXEC | O_NONBLOCK));
+
+sock_create:
+    __sock_create(current->nsproxy->net_ns, family, type, protocol, res, 0);
+        sock = sock_alloc();
+        pf = rcu_dereference(net_families[family]);
+        err = pf->create(net, sock, protocol, kern);                        //inet_create
+
+
+
+inet_create:
+
+    list_for_each_entry_rcu(answer, &inetsw[sock->type], list) {            //遍历inetsw链表数组
+        err = 0;
+        /* Check the non-wild match. */
+        if (protocol == answer->protocol) {
+            if (protocol != IPPROTO_IP)
+                break;
+        } else {
+            /* Check for the two wild cases. */
+            if (IPPROTO_IP == protocol) {
+                protocol = answer->protocol;
+                break;
+            }
+            if (IPPROTO_IP == answer->protocol)
+                break;
+        }
+        err = -EPROTONOSUPPORT;
+    }
+
+    sock->ops = answer->ops;                                                //赋值ops
+    answer_prot = answer->prot;                                             //赋值prot
+    answer_flags = answer->flags;
+
+    sk = sk_alloc(net, PF_INET, GFP_KERNEL, answer_prot, kern);             //这里根据answer_prot->obj_size=sizeof(tcp_sock/udp_sock)
+
+    sock_init_data(sock, sk);                                               //???important init func
+
+    sk->sk_prot->init(sk);                                                  //sk->sk_prot = tcp_prot   {.init = tcp_v4_init_sock}
+
+
+

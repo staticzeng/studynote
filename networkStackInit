@@ -1,0 +1,305 @@
+网络协议栈初始化：
+
+159 /* Supported address families. */
+160 #define AF_UNSPEC   0
+161 #define AF_UNIX     1   /* Unix domain sockets      */
+162 #define AF_LOCAL    1   /* POSIX name for AF_UNIX   */
+163 #define AF_INET     2   /* Internet IP Protocol     */
+164 #define AF_AX25     3   /* Amateur Radio AX.25      */
+165 #define AF_IPX      4   /* Novell IPX           */
+166 #define AF_APPLETALK    5   /* AppleTalk DDP        */
+167 #define AF_NETROM   6   /* Amateur Radio NET/ROM    */
+168 #define AF_BRIDGE   7   /* Multiprotocol bridge     */
+169 #define AF_ATMPVC   8   /* ATM PVCs         */
+170 #define AF_X25      9   /* Reserved for X.25 project    */
+171 #define AF_INET6    10  /* IP version 6         */
+172 #define AF_ROSE     11  /* Amateur Radio X.25 PLP   */
+173 #define AF_DECnet   12  /* Reserved for DECnet project  */
+174 #define AF_NETBEUI  13  /* Reserved for 802.2LLC project*/
+175 #define AF_SECURITY 14  /* Security callback pseudo AF */
+176 #define AF_KEY      15      /* PF_KEY key management API */
+177 #define AF_NETLINK  16
+178 #define AF_ROUTE    AF_NETLINK /* Alias to emulate 4.4BSD */
+179 #define AF_PACKET   17  /* Packet family        */
+180 #define AF_ASH      18  /* Ash              */
+181 #define AF_ECONET   19  /* Acorn Econet         */
+182 #define AF_ATMSVC   20  /* ATM SVCs         */
+183 #define AF_RDS      21  /* RDS sockets          */
+184 #define AF_SNA      22  /* Linux SNA Project (nutters!) */
+185 #define AF_IRDA     23  /* IRDA sockets         */
+186 #define AF_PPPOX    24  /* PPPoX sockets        */
+187 #define AF_WANPIPE  25  /* Wanpipe API Sockets */
+188 #define AF_LLC      26  /* Linux LLC            */
+189 #define AF_IB       27  /* Native InfiniBand address    */
+190 #define AF_MPLS     28  /* MPLS */
+191 #define AF_CAN      29  /* Controller Area Network      */
+192 #define AF_TIPC     30  /* TIPC sockets         */
+193 #define AF_BLUETOOTH    31  /* Bluetooth sockets        */
+194 #define AF_IUCV     32  /* IUCV sockets         */
+195 #define AF_RXRPC    33  /* RxRPC sockets        */
+196 #define AF_ISDN     34  /* mISDN sockets        */
+197 #define AF_PHONET   35  /* Phonet sockets       */
+198 #define AF_IEEE802154   36  /* IEEE802154 sockets       */
+199 #define AF_CAIF     37  /* CAIF sockets         */
+200 #define AF_ALG      38  /* Algorithm sockets        */
+201 #define AF_NFC      39  /* NFC sockets          */
+202 #define AF_VSOCK    40  /* vSockets         */
+203 #define AF_KCM      41  /* Kernel Connection Multiplexor*/
+204 #define AF_QIPCRTR  42  /* Qualcomm IPC Router          */
+205 
+206 #define AF_MAX      43  /* For now.. */
+
+
+200 struct net_proto_family {
+201     int     family;                                             //对应socket函数的family参数
+202     int     (*create)(struct net *net, struct socket *sock,     //create函数用来创建对应family的socket
+203                   int protocol, int kern);
+204     struct module   *owner;
+205 };   
+sock_register 将net_proto_family添加到net_families数组
+
+
+
+//这里以AF_INET为例，列出AF_INET的所有protocol type
+inet_register_protosw           //负责将inet_protosw根据type添加到inetsw链表数组中
+
+inet_init:
+     for (r = &inetsw[0]; r < &inetsw[SOCK_MAX]; ++r)                       //初始化inetsw数组
+         INIT_LIST_HEAD(r);
+ 
+     for (q = inetsw_array; q < &inetsw_array[INETSW_ARRAY_LEN]; ++q)       //将inetsw_array全部赋值到inetsw中
+         inet_register_protosw(q);
+
+ 995 static struct inet_protosw inetsw_array[] =
+ 996 {
+ 997     {
+ 998         .type =       SOCK_STREAM,
+ 999         .protocol =   IPPROTO_TCP,
+1000         .prot =       &tcp_prot,
+1001         .ops =        &inet_stream_ops,
+1002         .flags =      INET_PROTOSW_PERMANENT |
+1003                   INET_PROTOSW_ICSK,
+1004     },
+1005 
+1006     {
+1007         .type =       SOCK_DGRAM,
+1008         .protocol =   IPPROTO_UDP,
+1009         .prot =       &udp_prot,
+1010         .ops =        &inet_dgram_ops,
+1011         .flags =      INET_PROTOSW_PERMANENT,
+1012        },
+1013 
+1014        {
+1015         .type =       SOCK_DGRAM,
+1016         .protocol =   IPPROTO_ICMP,
+1017         .prot =       &ping_prot,
+1018         .ops =        &inet_dgram_ops,
+1019         .flags =      INET_PROTOSW_REUSE,
+1020        },
+1021 
+1022        {
+1023            .type =       SOCK_RAW,
+1024            .protocol =   IPPROTO_IP,    /* wild card */
+1025            .prot =       &raw_prot,
+1026            .ops =        &inet_sockraw_ops,
+1027            .flags =      INET_PROTOSW_REUSE,
+1028        }
+1029 };
+
+//其他的inet_protosw类型
+   1   1043  net/dccp/ipv4.c <<dccp_v4_init>>
+             inet_register_protosw(&dccp_v4_protosw);
+   2   1810  net/ipv4/af_inet.c <<inet_init>>
+             inet_register_protosw(q);
+   3    129  net/ipv4/udplite.c <<udplite4_register>>
+             inet_register_protosw(&udplite4_protosw);
+   4    638  net/l2tp/l2tp_ip.c <<l2tp_ip_init>>
+             inet_register_protosw(&l2tp_ip_protosw);
+   5   1162  net/sctp/protocol.c <<sctp_v4_protosw_init>>
+             inet_register_protosw(&sctp_seqpacket_protosw);
+   6   1163  net/sctp/protocol.c <<sctp_v4_protosw_init>>
+             inet_register_protosw(&sctp_stream_protosw);
+
+
+
+
+
+
+
+
+
+
+
+inet_protos初始化
+const struct net_protocol __rcu *inet_protos[MAX_INET_PROTOS] __read_mostly;
+inet_protos是inet传输层的处理，在ip层收完(ip_local_deliver_finish)之后通过比对inet_protos数组来向上传递
+
+/* This is used to register protocols. */
+struct net_protocol {
+    void            (*early_demux)(struct sk_buff *skb);
+    int         (*handler)(struct sk_buff *skb);
+    void            (*err_handler)(struct sk_buff *skb, u32 info);
+    unsigned int        no_policy:1,
+                netns_ok:1,
+                /* does the protocol do more stringent
+                 * icmp tag validation than simple
+                 * socket lookup?
+                 */
+                icmp_strict_tag_validation:1;
+};
+
+   1   1039  net/dccp/ipv4.c <<dccp_v4_init>>
+             err = inet_add_protocol(&dccp_v4_protocol, IPPROTO_DCCP);
+   2   1794  net/ipv4/af_inet.c <<inet_init>>
+             if (inet_add_protocol(&icmp_protocol, IPPROTO_ICMP) < 0)
+   3   1796  net/ipv4/af_inet.c <<inet_init>>
+             if (inet_add_protocol(&udp_protocol, IPPROTO_UDP) < 0)
+   4   1798  net/ipv4/af_inet.c <<inet_init>>
+             if (inet_add_protocol(&tcp_protocol, IPPROTO_TCP) < 0)
+   5   1801  net/ipv4/af_inet.c <<inet_init>>
+             if (inet_add_protocol(&igmp_protocol, IPPROTO_IGMP) < 0)
+   6    179  net/ipv4/gre_demux.c <<gre_init>>
+             if (inet_add_protocol(&net_gre_protocol, IPPROTO_GRE) < 0) {
+   7   2816  net/ipv4/ipmr.c <<ip_mr_init>>
+             if (inet_add_protocol(&pim_protocol, IPPROTO_PIM) < 0) {
+   8    210  net/ipv4/tunnel4.c <<tunnel4_init>>
+             if (inet_add_protocol(&tunnel4_protocol, IPPROTO_IPIP))
+   9    213  net/ipv4/tunnel4.c <<tunnel4_init>>
+             if (inet_add_protocol(&tunnel64_protocol, IPPROTO_IPV6)) {
+  10    219  net/ipv4/tunnel4.c <<tunnel4_init>>
+             if (inet_add_protocol(&tunnelmpls4_protocol, IPPROTO_MPLS)) {
+  11    126  net/ipv4/udplite.c <<udplite4_register>>
+             if (inet_add_protocol(&udplite_protocol, IPPROTO_UDPLITE) < 0)
+  12    248  net/ipv4/xfrm4_protocol.c <<xfrm4_protocol_register>>
+             if (inet_add_protocol(netproto(protocol), protocol)) {
+  13    634  net/l2tp/l2tp_ip.c <<l2tp_ip_init>>
+             err = inet_add_protocol(&l2tp_ip_protocol, IPPROTO_L2TP);
+  14   1181  net/sctp/protocol.c <<sctp_v4_add_protocol>>
+             if (inet_add_protocol(&sctp_protocol, IPPROTO_SCTP) < 0)
+
+
+
+
+
+
+
+
+
+
+
+
+ //返回不同的列表
+ 377 static inline struct list_head *ptype_head(const struct packet_type *pt)
+ 378 {
+ 379     if (pt->type == htons(ETH_P_ALL))
+ 380         return pt->dev ? &pt->dev->ptype_all : &ptype_all;
+ 381     else
+ 382         return pt->dev ? &pt->dev->ptype_specific :
+ 383                  &ptype_base[ntohs(pt->type) & PTYPE_HASH_MASK];
+ 384 }
+ 385
+ 386 +-- 12 lines: *-------------------------------------------------------------------------------------------------------------------
+ //dev_add_pack负责添加协议到指定的位置 ptype_all dev->ptype_all 以及 ptype_base下面
+ 399 void dev_add_pack(struct packet_type *pt)
+ 400 {
+ 401     struct list_head *head = ptype_head(pt);
+ 402
+ 403     spin_lock(&ptype_lock);
+ 404     list_add_rcu(&pt->list, head);
+ 405     spin_unlock(&ptype_lock);
+ 406 }
+ 407 EXPORT_SYMBOL(dev_add_pack);
+
+
+   1    212  drivers/block/aoe/aoenet.c <<aoenet_init>>
+             dev_add_pack(&aoe_pt);
+   2    601  drivers/net/hamradio/bpqether.c <<bpq_init_driver>>
+             dev_add_pack(&bpq_packet_type);
+   3   1183  drivers/net/ppp/pppoe.c <<pppoe_init>>
+             dev_add_pack(&pppoes_ptype);
+   4   1184  drivers/net/ppp/pppoe.c <<pppoe_init>>
+             dev_add_pack(&pppoed_ptype);
+   5    386  drivers/net/wan/hdlc.c <<hdlc_module_init>>
+             dev_add_pack(&hdlc_packet_type);
+   6    419  drivers/net/wan/lapbether.c <<lapbeth_init_driver>>
+             dev_add_pack(&lapbeth_packet_type);
+   7   1246  drivers/scsi/bnx2fc/bnx2fc_fcoe.c <<bnx2fc_interface_setup>>
+             dev_add_pack(&interface->fip_packet_type);
+   8   1251  drivers/scsi/bnx2fc/bnx2fc_fcoe.c <<bnx2fc_interface_setup>>
+             dev_add_pack(&interface->fcoe_packet_type);
+   9    361  drivers/scsi/fcoe/fcoe.c <<fcoe_interface_setup>>
+             dev_add_pack(&fcoe->fcoe_packet_type);
+  10    366  drivers/scsi/fcoe/fcoe.c <<fcoe_interface_setup>>
+             dev_add_pack(&fcoe->fip_packet_type);
+  11    372  drivers/scsi/fcoe/fcoe.c <<fcoe_interface_setup>>
+             dev_add_pack(&fcoe->fip_vlan_packet_type);
+  12    917  net/802/mrp.c <<mrp_register_application>>
+             dev_add_pack(&appl->pkttype);
+  13   1925  net/appletalk/ddp.c <<atalk_init>>
+             dev_add_pack(&ltalk_packet_type);
+  14   1926  net/appletalk/ddp.c <<atalk_init>>
+             dev_add_pack(&ppptalk_packet_type);
+  15   1990  net/ax25/af_ax25.c <<ax25_init>>
+             dev_add_pack(&ax25_packet_type);
+  16    565  net/batman-adv/hard-interface.c <<batadv_hardif_enable_interface>>
+             dev_add_pack(&hard_iface->batman_adv_ptype);
+  17    561  net/caif/caif_dev.c <<caif_device_init>>
+             dev_add_pack(&caif_packet_type);
+  18    176  net/caif/caif_usb.c <<cfusbl_device_notify>>
+             dev_add_pack(&caif_usb_type);
+  19    926  net/can/af_can.c <<can_init>>
+             dev_add_pack(&can_packet);
+  20    927  net/can/af_can.c <<can_init>>
+             dev_add_pack(&canfd_packet);
+  21   2380  net/decnet/af_decnet.c <<decnet_init>>
+             dev_add_pack(&dn_dix_packet_type);
+  22   1120  net/dsa/dsa.c <<dsa_init_module>>
+             dev_add_pack(&dsa_pack_type);
+  23    325  net/ieee802154/6lowpan/rx.c <<lowpan_rx_init>>
+             dev_add_pack(&lowpan_packet_type);
+  24   1104  net/ieee802154/socket.c <<af_ieee802154_init>>
+             dev_add_pack(&ieee802154_packet_type);
+  25   1865  net/ipv4/af_inet.c <<inet_init>>
+             dev_add_pack(&ip_packet_type);
+  26   1251  net/ipv4/arp.c <<arp_init>>
+             dev_add_pack(&arp_packet_type);
+  27    485  net/ipv4/ipconfig.c <<ic_rarp_init>>
+             dev_add_pack(&rarp_packet_type);
+  28    784  net/ipv4/ipconfig.c <<ic_bootp_init>>
+             dev_add_pack(&bootp_packet_type);
+  29    729  net/ipv6/af_inet6.c <<ipv6_packet_init>>
+             dev_add_pack(&ipv6_packet_type);
+  30   2021  net/ipx/af_ipx.c <<ipx_init>>
+             dev_add_pack(&ipx_dix_packet_type);
+  31   2027  net/ipx/af_ipx.c <<ipx_init>>
+             dev_add_pack(&ipx_8023_packet_type);
+  32     98  net/irda/irmod.c <<irda_init>>
+             dev_add_pack(&irda_packet_type);
+  33   2464  net/iucv/af_iucv.c <<afiucv_init>>
+             dev_add_pack(&iucv_packet_type);
+  34    147  net/llc/llc_core.c <<llc_init>>
+             dev_add_pack(&llc_packet_type);
+  35    148  net/llc/llc_core.c <<llc_init>>
+             dev_add_pack(&llc_tr_packet_type);
+  36   1723  net/mpls/af_mpls.c <<mpls_init>>
+             dev_add_pack(&mpls_packet_type);
+  37   1245  net/ncsi/ncsi-manage.c <<mpls_init>>
+             dev_add_pack(&ndp->ptype);
+  38    348  net/packet/af_packet.c <<register_prot_hook>>
+             dev_add_pack(&po->prot_hook);
+  39   1690  net/packet/af_packet.c <<fanout_add>>
+             dev_add_pack(&match->prot_hook);
+  40    523  net/phonet/af_phonet.c <<phonet_init>>
+             dev_add_pack(&phonet_packet_type);
+  41    666  net/tipc/bearer.c <<tipc_bearer_setup>>
+             dev_add_pack(&tipc_packet_type);
+  42   1802  net/x25/af_x25.c <<x25_init>>
+             dev_add_pack(&x25_packet_type);
+
+
+
+
+
+
+
+
