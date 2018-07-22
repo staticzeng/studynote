@@ -1,0 +1,132 @@
+1.NF_INET_PRE_ROUTING钩子函数执行
+2.查找路由
+3.ip_local_deliver 或者 ip_forward
+4.ip_local_deliver中执行分片重组
+5.然后执行NF_INET_LOCAL_IN钩子函数
+
+ip_local_deliver:
+    ...
+    if (ip_is_fragment(ip_hdr(skb))) {
+        if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
+            return 0;
+    }
+    ...
+
+static inline bool ip_is_fragment(const struct iphdr *iph)
+{
+    return (iph->frag_off & htons(IP_MF | IP_OFFSET)) != 0;
+}
+
+int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
+{
+    ...
+    /* Lookup (or create) queue header */
+    qp = ip_find(net, ip_hdr(skb), user, vif);
+    if (qp) {
+        int ret;
+
+        spin_lock(&qp->q.lock);
+
+        ret = ip_frag_queue(qp, skb);
+
+        spin_unlock(&qp->q.lock);
+        ipq_put(qp);
+        return ret;
+    }
+    ...
+}
+
+ip_find:
+
+    //通过标识，源地址，目的地址，协议 计算hash值
+    hash = ipqhashfn(iph->id, iph->saddr, iph->daddr, iph->protocol);
+
+    //根据hash值从ip4_frags中找到 inet_frag_queue *q
+    q = inet_frag_find(&net->ipv4.frags, &ip4_frags, &arg, hash);
+
+
+struct inet_frags {
+    struct inet_frag_bucket hash[INETFRAGS_HASHSZ];     //inet_frag_bucket结构包含一个hlist_head 以及一个 spinlock_t
+
+    struct work_struct  frags_work;
+    unsigned int next_bucket;
+    unsigned long last_rebuild_jiffies;
+    bool rebuild;
+
+    /* The first call to hashfn is responsible to initialize
+     * rnd. This is best done with net_get_random_once.
+     *
+     * rnd_seqlock is used to let hash insertion detect
+     * when it needs to re-lookup the hash chain to use.
+     */
+    u32         rnd;
+    seqlock_t       rnd_seqlock;
+    int         qsize;
+
+    unsigned int        (*hashfn)(const struct inet_frag_queue *);
+    bool            (*match)(const struct inet_frag_queue *q,
+                     const void *arg);
+    void            (*constructor)(struct inet_frag_queue *q,
+                           const void *arg);
+    void            (*destructor)(struct inet_frag_queue *);
+    void            (*frag_expire)(unsigned long data);
+    struct kmem_cache   *frags_cachep;
+    const char      *frags_cache_name;
+};
+
+//inet_frags初始化
+void __init ipfrag_init(void)
+{
+    ip4_frags_ctl_register();
+    register_pernet_subsys(&ip4_frags_ops);
+    ip4_frags.hashfn = ip4_hashfn;
+    ip4_frags.constructor = ip4_frag_init;
+    ip4_frags.destructor = ip4_frag_free;
+    ip4_frags.qsize = sizeof(struct ipq);
+    ip4_frags.match = ip4_frag_match;
+    ip4_frags.frag_expire = ip_expire;
+    ip4_frags.frags_cache_name = ip_frag_cache_name;
+    if (inet_frags_init(&ip4_frags))
+        panic("IP: failed to allocate ip4_frags cache\n");
+}
+
+
+
+inet_frag_find:
+
+    //找到hash map中对应的桶
+    hash &= (INETFRAGS_HASHSZ - 1);
+    hb = &f->hash[hash];
+
+    //遍历chain，通过match判定是否符合
+    spin_lock(&hb->chain_lock);
+    //list中串联的是inet_frag_queue结构
+    hlist_for_each_entry(q, &hb->chain, list) {
+        if (q->net == nf && f->match(q, key)) {
+            atomic_inc(&q->refcnt);
+            spin_unlock(&hb->chain_lock);
+            return q;
+        }
+        depth++;
+    }
+
+
+static bool ip4_frag_match(const struct inet_frag_queue *q, const void *a)
+{
+    const struct ipq *qp;
+    const struct ip4_create_arg *arg = a;
+
+    //ipq第一个字段就是一个inet_frag_queue结构
+    qp = container_of(q, struct ipq, q);
+    return  qp->id == arg->iph->id &&
+        qp->saddr == arg->iph->saddr &&
+        qp->daddr == arg->iph->daddr &&
+        qp->protocol == arg->iph->protocol &&
+        qp->user == arg->user &&
+        qp->vif == arg->vif;
+}
+
+
+/* Add new segment to existing queue. */
+ip_frag_queue:
+

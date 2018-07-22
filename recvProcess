@@ -123,10 +123,20 @@ ip_local_deliver:
 
 ip_local_deliver_finish:
 
+        /* 获取协议 */
+        int protocol = ip_hdr(skb)->protocol;
 
+        /* 原始套接口，复制一个副本，输出到该套接口 */
+        raw = raw_local_deliver(skb, protocol);
 
+        /* 获取协议处理结构 */
+        ipprot = rcu_dereference(inet_protos[protocol]); 
 
-
-
+        if (ipprot) {
+            ...
+            /* 上层协议收包处理 */
+            ret = ipprot->handler(skb);         //tcp_protocol->handler = tcp_v4_rcv
+            ...
+        }
 
 
