@@ -4,6 +4,7 @@
 4.ip_local_deliver中执行分片重组
 5.然后执行NF_INET_LOCAL_IN钩子函数
 
+=====================================================================
 ip_local_deliver:
     ...
     if (ip_is_fragment(ip_hdr(skb))) {
@@ -12,11 +13,13 @@ ip_local_deliver:
     }
     ...
 
+=====================================================================
 static inline bool ip_is_fragment(const struct iphdr *iph)
 {
     return (iph->frag_off & htons(IP_MF | IP_OFFSET)) != 0;
 }
 
+=====================================================================
 int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 {
     ...
@@ -36,6 +39,7 @@ int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
     ...
 }
 
+====================================================================
 ip_find:
 
     //通过标识，源地址，目的地址，协议 计算hash值
@@ -44,9 +48,26 @@ ip_find:
     //根据hash值从ip4_frags中找到 inet_frag_queue *q
     q = inet_frag_find(&net->ipv4.frags, &ip4_frags, &arg, hash);
 
+====================================================================
+struct inet_frag_queue {
+    spinlock_t      lock;
+    struct timer_list   timer;
+    struct hlist_node   list;
+    atomic_t        refcnt;
+    struct sk_buff      *fragments;                 //sk_buff 链表
+    struct sk_buff      *fragments_tail;
+    ktime_t         stamp;
+    int         len;
+    int         meat;
+    __u8            flags;
+    u16         max_size;
+    struct netns_frags  *net;
+    struct hlist_node   list_evictor;
+};
+
 
 struct inet_frags {
-    struct inet_frag_bucket hash[INETFRAGS_HASHSZ];     //inet_frag_bucket结构包含一个hlist_head 以及一个 spinlock_t
+    struct inet_frag_bucket hash[INETFRAGS_HASHSZ];     //hash表,每个链表的每个节点都是一个ipq,ipq第一个字段是一个inet_frag_queue
 
     struct work_struct  frags_work;
     unsigned int next_bucket;
@@ -74,6 +95,7 @@ struct inet_frags {
     const char      *frags_cache_name;
 };
 
+==================================================================
 //inet_frags初始化
 void __init ipfrag_init(void)
 {
@@ -91,7 +113,7 @@ void __init ipfrag_init(void)
 }
 
 
-
+==================================================================
 inet_frag_find:
 
     //找到hash map中对应的桶
@@ -126,7 +148,62 @@ static bool ip4_frag_match(const struct inet_frag_queue *q, const void *a)
         qp->vif == arg->vif;
 }
 
-
+=============================================================================
 /* Add new segment to existing queue. */
 ip_frag_queue:
+    ...
+    /* Determine the position of this fragment. */
+    end = offset + skb->len - skb_network_offset(skb) - ihl;    //根据offset(已经<<3处理过) + skb->len - header求出总长度
+    err = -EINVAL;
+
+    /* Is this the final fragment? */
+    if ((flags & IP_MF) == 0) {
+        /* If we already have some bits beyond end
+         * or have different end, the segment is corrupted.
+         */
+        if (end < qp->q.len ||
+            ((qp->q.flags & INET_FRAG_LAST_IN) && end != qp->q.len))
+            goto err;
+        qp->q.flags |= INET_FRAG_LAST_IN;                   //如果是最后一片就设置flag
+        qp->q.len = end;                                    //同时根据最后一片的end设置长度
+    } else {
+        if (end&7) {
+            end &= ~7;
+            if (skb->ip_summed != CHECKSUM_UNNECESSARY)
+                skb->ip_summed = CHECKSUM_NONE;
+        }
+        if (end > qp->q.len) {
+            /* Some bits beyond end -> corruption. */
+            if (qp->q.flags & INET_FRAG_LAST_IN)
+                goto err;
+            qp->q.len = end;
+        }
+    }
+    ...
+
+    prev = qp->q.fragments_tail;                        //如果存在最后一项，而且最后一项的offset < 当前的offset，则表示是最后一块
+    if (!prev || FRAG_CB(prev)->offset < offset) {
+        next = NULL;
+        goto found;
+    }
+    prev = NULL;                                        //不是最后一项则遍历寻找
+    for (next = qp->q.fragments; next != NULL; next = next->next) {
+        if (FRAG_CB(next)->offset >= offset)
+            break;  /* bingo! */
+        prev = next;
+    }
+
+    ...//记住prev和next,处理overlap  重叠是怎么产生的？？？
+
+
+    //如果头尾都设置了，而且有效长度等于最后一片end值，则根据链表重新生成一个skb
+    if (qp->q.flags == (INET_FRAG_FIRST_IN | INET_FRAG_LAST_IN) &&
+        qp->q.meat == qp->q.len) {
+        unsigned long orefdst = skb->_skb_refdst;
+
+        skb->_skb_refdst = 0UL;
+        err = ip_frag_reasm(qp, prev, dev);             //重组的时候是以当前的skb结构作为头部来重新拼凑内存的
+        skb->_skb_refdst = orefdst;
+        return err;
+    }
 
