@@ -52,12 +52,17 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
     retval = sock_create(family, type, protocol, &sock);
     retval = sock_map_fd(sock, flags & (O_CLOEXEC | O_NONBLOCK));
 
+sock_map_fd:                //将sock设置在file结构中最终映射到fd上
+    sock_alloc_file
+    1)sock->file = file
+    2)file->private_data = sock
+    3)file->f_op = socket_file_ops
+
 sock_create:
     __sock_create(current->nsproxy->net_ns, family, type, protocol, res, 0);
         sock = sock_alloc();
         pf = rcu_dereference(net_families[family]);
         err = pf->create(net, sock, protocol, kern);                        //inet_create
-
 
 
 inet_create:
@@ -89,6 +94,4 @@ inet_create:
     sock_init_data(sock, sk);                                               //???important init func
 
     sk->sk_prot->init(sk);                                                  //sk->sk_prot = tcp_prot   {.init = tcp_v4_init_sock}
-
-
 

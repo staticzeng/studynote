@@ -1,0 +1,251 @@
+桥接是在二层中处理的
+
+__netif_receive_skb_core函数中先后对sniffix, vlan, bridge/ovs, 正常的协议 进行了处理
+
+
+brctl addbr 流程:
+
+br_init
+    brioctl_set(br_ioctl_deviceless_stub);      //设置bridge的ioctl处理函数
+
+br_ioctl_deviceless_stub:
+    br_add_bridge/br_del_bridge
+
+br_add_bridge:
+    alloc_netdev(sizeof(struct net_bridge), name, NET_NAME_UNKNOWN,br_dev_setup);   //私有数据为net_bridge,使用br_dev_setup初始化
+
+
+static const struct net_device_ops br_netdev_ops = {
+    .ndo_open        = br_dev_open,
+    .ndo_stop        = br_dev_stop,
+    .ndo_init        = br_dev_init,
+    .ndo_start_xmit      = br_dev_xmit,
+    .ndo_get_stats64     = br_get_stats64,
+    .ndo_set_mac_address     = br_set_mac_address,
+    .ndo_set_rx_mode     = br_dev_set_multicast_list,
+    .ndo_change_rx_flags     = br_dev_change_rx_flags,
+    .ndo_change_mtu      = br_change_mtu,
+    .ndo_do_ioctl        = br_dev_ioctl,                    //添加port调用这个函数处理
+#ifdef CONFIG_NET_POLL_CONTROLLER
+    .ndo_netpoll_setup   = br_netpoll_setup,
+    .ndo_netpoll_cleanup     = br_netpoll_cleanup,
+    .ndo_poll_controller     = br_poll_controller,
+#endif
+    .ndo_add_slave       = br_add_slave,
+    .ndo_del_slave       = br_del_slave,
+    .ndo_fix_features        = br_fix_features,
+    .ndo_neigh_construct     = netdev_default_l2upper_neigh_construct,
+    .ndo_neigh_destroy   = netdev_default_l2upper_neigh_destroy,
+    .ndo_fdb_add         = br_fdb_add,
+    .ndo_fdb_del         = br_fdb_delete,
+    .ndo_fdb_dump        = br_fdb_dump,
+    .ndo_bridge_getlink  = br_getlink,
+    .ndo_bridge_setlink  = br_setlink,
+    .ndo_bridge_dellink  = br_dellink,
+    .ndo_features_check  = passthru_features_check,
+};
+
+
+void br_dev_setup(struct net_device *dev)
+{
+    struct net_bridge *br = netdev_priv(dev);
+
+    eth_hw_addr_random(dev);                            //生成一个随机的网卡地址
+    ether_setup(dev);
+
+    dev->netdev_ops = &br_netdev_ops;                   //dev_ops
+    dev->destructor = br_dev_free;
+    dev->ethtool_ops = &br_ethtool_ops;
+    SET_NETDEV_DEVTYPE(dev, &br_type);
+    dev->priv_flags = IFF_EBRIDGE | IFF_NO_QUEUE;
+
+    dev->features = COMMON_FEATURES | NETIF_F_LLTX | NETIF_F_NETNS_LOCAL |
+            NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_STAG_TX;
+    dev->hw_features = COMMON_FEATURES | NETIF_F_HW_VLAN_CTAG_TX |
+               NETIF_F_HW_VLAN_STAG_TX;
+    dev->vlan_features = COMMON_FEATURES;
+
+    br->dev = dev;
+    spin_lock_init(&br->lock);
+    INIT_LIST_HEAD(&br->port_list);
+    spin_lock_init(&br->hash_lock);
+
+    br->bridge_id.prio[0] = 0x80;
+    br->bridge_id.prio[1] = 0x00;
+
+    ether_addr_copy(br->group_addr, eth_reserved_addr_base);
+
+    br->stp_enabled = BR_NO_STP;
+    br->group_fwd_mask = BR_GROUPFWD_DEFAULT;
+    br->group_fwd_mask_required = BR_GROUPFWD_DEFAULT;
+
+    br->stp_enabled = BR_NO_STP;
+    br->group_fwd_mask = BR_GROUPFWD_DEFAULT;
+    br->group_fwd_mask_required = BR_GROUPFWD_DEFAULT;
+
+    br->designated_root = br->bridge_id;
+    br->bridge_max_age = br->max_age = 20 * HZ;
+    br->bridge_hello_time = br->hello_time = 2 * HZ;
+    br->bridge_forward_delay = br->forward_delay = 15 * HZ;
+    br->ageing_time = BR_DEFAULT_AGEING_TIME;
+
+    br_netfilter_rtable_init(br);
+    br_stp_timer_init(br);
+    br_multicast_init(br);
+}
+
+
+brctl addif流程:
+
+添加网桥接口,ioctl调用网桥相关的dev_ops->ndo_do_ioctl
+int br_dev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+    case SIOCBRADDIF:
+    case SIOCBRDELIF:
+        return add_del_if(br, rq->ifr_ifindex, cmd == SIOCBRADDIF);
+
+
+add_del_if:
+    dev = __dev_get_by_index(net, ifindex);
+    br_add_if(br, dev);
+
+
+br_add_if:
+    检查是否以太网设备,ELOOP ,EBUSY是否已经加入到网桥中
+    new_nbp
+      1)生成一个port index
+      2)申请net_bridge_port内存
+      3)p->br = br
+      4)初始化port
+    netdev_rx_handler_register(dev, br_handle_frame, p);        //dev->rx_handler = br_handle_frame  dev->rx_handler_data = p(rx_handler_data是dev到port之间的联系)
+    list_add_rcu(&p->list, &br->port_list);                 //将port加入到br的port_list中
+    br_fdb_insert           //添加硬件地址转发表
+
+    ...
+
+    //这里会改变桥的物理地址
+    changed_addr = br_stp_recalculate_bridge_id(br);
+
+    if (changed_addr)
+        call_netdevice_notifiers(NETDEV_CHANGEADDR, br->dev);
+
+
+br_stp_recalculate_bridge_id:
+    //初始时addr == br_mac_zero,循环找到port_list中最小的网卡地址赋值给addr
+    list_for_each_entry(p, &br->port_list, list) {
+        if (addr == br_mac_zero ||
+            memcmp(p->dev->dev_addr, addr, ETH_ALEN) < 0)
+            addr = p->dev->dev_addr;
+    }
+
+    //比较与当前是否相等
+    if (ether_addr_equal(br->bridge_id.addr, addr))
+        return false;   /* no change */
+
+    br_stp_change_bridge_id(br, addr);
+
+
+br_stp_change_bridge_id:
+    memcpy(oldaddr, br->bridge_id.addr, ETH_ALEN);
+    memcpy(br->bridge_id.addr, addr, ETH_ALEN);
+    memcpy(br->dev->dev_addr, addr, ETH_ALEN);
+
+
+包处理流程:
+br_handle_frame:
+    检查是否是回环网络包
+    是否合格的以太网地址(排除掉多播和全零)
+    是否是link-local保留的地址(01:80:c2:00:00:00)这个地址用于网桥之间交换信息
+    
+forward:
+	switch (p->state) {
+	case BR_STATE_FORWARDING:
+		rhook = rcu_dereference(br_should_route_hook);
+		if (rhook) {
+			if ((*rhook)(skb)) {
+				*pskb = skb;
+				return RX_HANDLER_PASS;
+			}
+			dest = eth_hdr(skb)->h_dest;
+		}
+		/* fall through */
+	case BR_STATE_LEARNING:
+        //目的地址是否是设备链路层地址
+		if (ether_addr_equal(p->br->dev->dev_addr, dest))
+			skb->pkt_type = PACKET_HOST;
+
+        //通过NF_BR_PRE_ROUTING钩子，转给br_handle_frame_finish
+		NF_HOOK(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
+			dev_net(skb->dev), NULL, skb, skb->dev, NULL,
+			br_handle_frame_finish);
+		break;
+	default:
+drop:
+		kfree_skb(skb);
+	}
+
+
+br_handle_frame_finish:
+
+	switch (pkt_type) {
+	case BR_PKT_MULTICAST:
+		mdst = br_mdb_get(br, skb, vid);
+		if ((mdst || BR_INPUT_SKB_CB_MROUTERS_ONLY(skb)) &&
+		    br_multicast_querier_exists(br, eth_hdr(skb))) {
+			if ((mdst && mdst->mglist) ||
+			    br_multicast_is_router(br)) {
+				local_rcv = true;
+				br->dev->stats.multicast++;
+			}
+			mcast_hit = true;
+		} else {
+			local_rcv = true;
+			br->dev->stats.multicast++;
+		}
+		break;
+	case BR_PKT_UNICAST:
+		dst = __br_fdb_get(br, dest, vid);
+	default:
+		break;
+	}
+
+	if (dst) {
+		if (dst->is_local)
+            //从这里到上层的包可以进一步的NAT转发出去
+			return br_pass_frame_up(skb);
+
+        //对于虚拟化环境下来说，桥接直接通过这里转发给其他port
+		dst->used = jiffies;
+		br_forward(dst->dst, skb, local_rcv, false);
+	} else {
+		if (!mcast_hit)
+			br_flood(br, skb, pkt_type, local_rcv, false);
+		else
+			br_multicast_flood(mdst, skb, local_rcv, false);
+	}
+
+	if (local_rcv)
+		return br_pass_frame_up(skb);
+
+
+br_forward:
+void br_forward(const struct net_bridge_port *to,
+        struct sk_buff *skb, bool local_rcv, bool local_orig)
+{
+    //local_rcv是根据混杂模式、广播、多播等判定出来是否需要向上层传递的标识
+    if (to && should_deliver(to, skb)) {
+        if (local_rcv)
+            deliver_clone(to, skb, local_orig);
+        else
+            __br_forward(to, skb, local_orig);
+        return;
+    }
+
+    if (!local_rcv)
+        kfree_skb(skb);
+}
+
+_br_forward:
+    修改skb->dev 然后转发出去 这里暂时不继续
+
+
+
