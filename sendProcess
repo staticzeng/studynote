@@ -1,0 +1,65 @@
+SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf, size_t, count)
+    vfs_write
+        __vfs_write
+            //对于socket file->f_op = socket_file_ops
+            if (file->f_op->write)
+                return file->f_op->write(file, p, count, pos);
+            else if (file->f_op->write_iter)
+                return new_sync_write(file, p, count, pos);
+            else
+                return -EINVAL;
+ 
+
+socket_file_ops.write_iter = sock_write_iter
+
+sock_write_iter:
+    sock = file->private_data;
+    sock_sendmsg(sock, &msg)
+
+sock_sendmsg:
+    sock_sendmsg_nosec
+        sock->ops->sendmsg(sock, msg, msg_data_left(msg));
+
+sock->ops = inet_stream_ops   ->sendmsg = inet_sendmsg
+
+inet_sendmsg
+    return sk->sk_prot->sendmsg(sk, msg, size);
+
+tcp_sendmsg:
+    rtcp_push
+        __tcp_push_pending_frames
+            tcp_write_xmit
+                tcp_transmit_skb
+                    icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
+
+
+ip_queue_xmit
+    ip_route_output_ports //查找路由
+    构造ip头部,分片
+    ip_local_out
+        __ip_local_out
+            NF_INET_LOCAL_OUT and dst_output
+
+dst_output
+    skb_dst(skb)->output(net, sk, skb);
+
+rt->dst.output = ip_output;
+
+ip_output
+    NF_INET_POST_ROUTING and ip_finish_output
+
+
+ip_finish_output
+    ip_skb_dst_mtu
+    ip_fragment
+    ip_finish_output2
+
+
+
+
+
+
+
+
+
+

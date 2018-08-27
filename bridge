@@ -210,6 +210,7 @@ br_handle_frame_finish:
 
 	if (dst) {
 		if (dst->is_local)
+            //所有桥上的网卡，包括虚拟网卡都是loca的
             //从这里到上层的包可以进一步的NAT转发出去
 			return br_pass_frame_up(skb);
 
